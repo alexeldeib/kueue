@@ -94,3 +94,20 @@ func TestExpectations(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileUIDs(t *testing.T) {
+	_, log := utiltesting.ContextWithLog(t)
+	key := types.NamespacedName{Namespace: "ns", Name: "group"}
+	store := NewStore("test")
+	store.ExpectUIDs(log, key, []types.UID{"still-pending", "already-observed", "deleted"})
+
+	store.ReconcileUIDs(log, key, []types.UID{"still-pending"})
+
+	if store.Satisfied(log, key) {
+		t.Fatal("expectations unexpectedly satisfied while one UID is still pending")
+	}
+	store.ObservedUID(log, key, "still-pending")
+	if !store.Satisfied(log, key) {
+		t.Fatal("expectations not satisfied after the remaining UID was observed")
+	}
+}

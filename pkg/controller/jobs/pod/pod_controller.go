@@ -721,6 +721,16 @@ func (p *Pod) Load(ctx context.Context, c client.Client, key *types.NamespacedNa
 	}, client.InNamespace(key.Namespace)); err != nil {
 		return false, err
 	}
+	if !p.satisfiedExcessPods {
+		pendingFinalizerUIDs := make([]types.UID, 0, len(p.list.Items))
+		for i := range p.list.Items {
+			if slices.Contains(p.list.Items[i].Finalizers, podconstants.PodFinalizer) {
+				pendingFinalizerUIDs = append(pendingFinalizerUIDs, p.list.Items[i].UID)
+			}
+		}
+		p.excessPodExpectations.ReconcileUIDs(ctrl.LoggerFrom(ctx), p.key, pendingFinalizerUIDs)
+		p.satisfiedExcessPods = p.excessPodExpectations.Satisfied(ctrl.LoggerFrom(ctx), p.key)
+	}
 
 	if len(p.list.Items) > 0 {
 		p.isFound = true

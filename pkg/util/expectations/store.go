@@ -72,6 +72,26 @@ func (e *Store) ObservedUID(log logr.Logger, key types.NamespacedName, uid types
 	}
 }
 
+// ReconcileUIDs removes expectations for UIDs that no longer have the state
+// the controller is waiting to observe. This repairs expectations when a watch
+// update or delete event is missed but a later informer list has converged.
+func (e *Store) ReconcileUIDs(log logr.Logger, key types.NamespacedName, pendingUIDs []types.UID) {
+	e.Lock()
+	defer e.Unlock()
+
+	stored, found := e.store[key]
+	if !found {
+		return
+	}
+	pending := sets.New(pendingUIDs...)
+	stale := stored.Difference(pending)
+	stored.Delete(stale.UnsortedList()...)
+	if stored.Len() == 0 {
+		delete(e.store, key)
+	}
+	log.V(3).Info("Reconciled UIDs", "store", e.name, "key", key, "staleUIDs", stale.UnsortedList())
+}
+
 func (e *Store) Satisfied(log logr.Logger, key types.NamespacedName) bool {
 	e.Lock()
 	_, found := e.store[key]

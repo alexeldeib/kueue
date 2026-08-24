@@ -52,6 +52,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/metrics"
 	"sigs.k8s.io/kueue/pkg/podset"
+	"sigs.k8s.io/kueue/pkg/util/expectations"
 	utilpod "sigs.k8s.io/kueue/pkg/util/pod"
 	"sigs.k8s.io/kueue/pkg/util/roletracker"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
@@ -64,6 +65,41 @@ import (
 type keyUIDs struct {
 	key  types.NamespacedName
 	uids []types.UID
+}
+
+func TestLoadReconcilesMissedFinalizerEvents(t *testing.T) {
+	const (
+		namespace = "test-ns"
+		groupName = "test-group"
+	)
+	_, log := utiltesting.ContextWithLog(t)
+	store := expectations.NewStore("finalizedPods")
+	key := types.NamespacedName{Namespace: namespace, Name: groupName}
+	store.ExpectUIDs(log, key, []types.UID{"missing-pod", "finalized-pod"})
+
+	pod := testingpod.MakePod("current", namespace).
+		UID("current-pod").
+		GroupNameLabel(groupName).
+		KueueFinalizer().
+		Obj()
+	finalizedPod := testingpod.MakePod("finalized", namespace).
+		UID("finalized-pod").
+		GroupNameLabel(groupName).
+		Obj()
+	client := utiltesting.NewClientBuilder().
+		WithIndex(&corev1.Pod{}, PodGroupNameCacheKey, IndexPodGroupName).
+		WithObjects(pod, finalizedPod).
+		Build()
+	group := NewPod(WithExcessPodExpectations(store))
+	reconcileKey := types.NamespacedName{Namespace: "group/" + namespace, Name: groupName}
+
+	_, err := group.Load(context.Background(), client, &reconcileKey)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !group.satisfiedExcessPods {
+		t.Fatal("Load() did not clear expectations whose Pods are missing or already finalized")
+	}
 }
 
 func TestPodsReady(t *testing.T) {
@@ -4611,7 +4647,7 @@ func TestReconciler(t *testing.T) {
 				},
 			},
 		},
-		"no failed pods are finalized while waiting for expectations": {
+		"no failed pods are finalized while waiting for live expectations": {
 			featureGates: map[featuregate.Feature]bool{features.WorkloadIdentifierAnnotations: false},
 			pods: []corev1.Pod{
 				*basePodWrapper.
@@ -4710,7 +4746,7 @@ func TestReconciler(t *testing.T) {
 			workloadCmpOpts: defaultWorkloadCmpOpts,
 			excessPodsExpectations: []keyUIDs{{
 				key:  types.NamespacedName{Name: "test-group", Namespace: "ns"},
-				uids: []types.UID{"some-other-pod"},
+				uids: []types.UID{"test-uid"},
 			}},
 		},
 		"no unnecessary additional failed pods are finalized": {
